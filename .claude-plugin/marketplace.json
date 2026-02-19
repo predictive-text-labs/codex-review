@@ -1,0 +1,17 @@
+{
+  "name": "codex-plan-review",
+  "owner": {
+    "name": "codex-plan-review"
+  },
+  "metadata": {
+    "description": "Automated plan review loop: Claude writes a plan, Codex evaluates it, loop repeats until optimal"
+  },
+  "plugins": [
+    {
+      "name": "codex-plan-review",
+      "source": "./plugin",
+      "description": "Automated plan review loop: Claude writes a plan, Codex evaluates it, loop repeats until optimal",
+      "version": "1.0.0"
+    }
+  ]
+}

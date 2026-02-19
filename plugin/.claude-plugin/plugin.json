@@ -1,0 +1,5 @@
+{
+  "name": "codex-plan-review",
+  "description": "Automated plan review loop: Claude writes a plan, Codex evaluates it, loop repeats until optimal",
+  "version": "1.0.0"
+}

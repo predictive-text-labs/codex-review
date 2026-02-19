@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "is_optimal": { "type": "boolean" },
+    "blocking_issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": { "type": "string", "enum": ["high", "medium", "low"] },
+          "claim": { "type": "string" },
+          "evidence": { "type": "string" },
+          "fix": { "type": "string" }
+        },
+        "required": ["severity", "claim", "evidence", "fix"]
+      }
+    },
+    "recommended_changes": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "annotated_plan_markdown": { "type": "string" },
+    "summary": { "type": "string" }
+  },
+  "required": ["is_optimal", "blocking_issues", "recommended_changes", "annotated_plan_markdown", "summary"],
+  "additionalProperties": false
+}
