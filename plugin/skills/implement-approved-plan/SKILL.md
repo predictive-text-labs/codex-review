@@ -8,27 +8,15 @@ You are implementing a plan that has been reviewed and approved by Codex. Follow
 
 ## Step 1: Validate Approval
 
-Before writing ANY code, validate the approval:
+Before writing ANY code, run the validation script:
 
-1. Read `docs/plan.md`.
-2. Read `.claude/review/approval.json`.
-3. Compute the SHA-256 hash of `docs/plan.md` content.
-4. Compare the computed hash to `approval.json.plan_hash`.
-5. Verify `approval.json.is_optimal` is `true`.
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/hooks/validate_approval.py
+```
 
-**You can compute the SHA-256 hash with:** `sha256sum docs/plan.md` or `shasum -a 256 docs/plan.md`
-
-### If approval.json is MISSING:
-Stop and tell the user:
-> "No approved plan found. Run `/plan-with-review` first to create and get approval for a plan."
-
-### If plan_hash does NOT match:
-Stop and tell the user:
-> "The plan has been modified since it was approved. The approval is no longer valid. Run `/plan-with-review` to re-approve the current plan."
-
-### If is_optimal is FALSE:
-Stop and tell the user:
-> "The plan was not approved as optimal by Codex. Run `/plan-with-review` to complete the review process."
+Parse the JSON output:
+- If `{"valid": true}` — proceed to Step 2.
+- If `{"valid": false, "reason": "..."}` — stop and show the `reason` to the user. Do NOT proceed.
 
 ## Step 2: Implement the Plan
 

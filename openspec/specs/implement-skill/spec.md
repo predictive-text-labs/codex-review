@@ -11,28 +11,23 @@ The system SHALL provide a Claude Code skill file at `.claude/skills/implement-a
 - **THEN** the skill is loaded and Claude follows its instructions
 
 ### Requirement: Skill validates approval before proceeding
-As its first step, the skill SHALL instruct Claude to:
-1. Read `docs/plan.md`
-2. Read `.claude/review/approval.json`
-3. Compute the SHA-256 hash of `docs/plan.md` content
-4. Compare the computed hash to `approval.json.plan_hash`
-5. Verify `approval.json.is_optimal` is `true`
+As its first step, the skill SHALL instruct Claude to run `python3 ${CLAUDE_PLUGIN_ROOT}/hooks/validate_approval.py` and parse the JSON output. If the result has `valid: false`, Claude SHALL stop and show the `reason` to the user. If `valid: true`, Claude SHALL proceed with implementation.
 
-#### Scenario: Valid approval — hashes match
-- **WHEN** `approval.json` exists, `is_optimal` is `true`, and `plan_hash` matches the SHA-256 of current `docs/plan.md`
+#### Scenario: Valid approval — script confirms
+- **WHEN** `validate_approval.py` outputs `{"valid": true}`
 - **THEN** Claude proceeds with implementation
 
-#### Scenario: approval.json missing
-- **WHEN** `.claude/review/approval.json` does not exist
-- **THEN** Claude stops and tells the user: "No approved plan found. Run /plan-with-review first."
+#### Scenario: approval.json missing — script reports
+- **WHEN** `validate_approval.py` outputs `{"valid": false, "reason": "..."}`
+- **THEN** Claude stops and shows the reason to the user
 
-#### Scenario: Hash mismatch — plan was modified after approval
-- **WHEN** `approval.json.plan_hash` does not match the SHA-256 of current `docs/plan.md`
-- **THEN** Claude stops and tells the user: "Plan has been modified since approval. Run /plan-with-review to re-approve."
+#### Scenario: Hash mismatch — script reports
+- **WHEN** `validate_approval.py` outputs `{"valid": false, "reason": "..."}`
+- **THEN** Claude stops and shows the reason to the user
 
-#### Scenario: is_optimal is false
-- **WHEN** `approval.json.is_optimal` is `false`
-- **THEN** Claude stops and tells the user: "Plan was not approved as optimal. Run /plan-with-review to complete the review."
+#### Scenario: is_optimal is false — script reports
+- **WHEN** `validate_approval.py` outputs `{"valid": false, "reason": "..."}`
+- **THEN** Claude stops and shows the reason to the user
 
 ### Requirement: Skill instructs Claude to follow the plan
 After validation, the skill SHALL instruct Claude to implement the changes described in `docs/plan.md`, following the `## Changes` section for file-level detail and the `## Approach` section for architectural guidance.

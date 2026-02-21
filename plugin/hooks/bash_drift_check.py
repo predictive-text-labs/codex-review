@@ -5,6 +5,7 @@ After any Bash command executes, checks git status for unexpected file changes
 outside docs/plan.md and .claude/review/. Blocks if drift is detected.
 """
 
+import hashlib
 import json
 import os
 import subprocess
@@ -53,6 +54,22 @@ def main():
         sys.exit(0)
 
     cwd = hook_input.get("cwd", os.getcwd())
+
+    # Skip drift detection if a valid approval exists (implementation phase)
+    review_dir = Path(cwd) / ".claude" / "review"
+    approval_path = review_dir / "approval.json"
+    plan_path = Path(cwd) / "docs" / "plan.md"
+    if approval_path.exists() and plan_path.exists():
+        try:
+            with open(approval_path) as f:
+                approval = json.load(f)
+            if approval.get("is_optimal"):
+                with open(plan_path, "rb") as f:
+                    actual_hash = hashlib.sha256(f.read()).hexdigest()
+                if approval.get("plan_hash") == actual_hash:
+                    sys.exit(0)
+        except (json.JSONDecodeError, OSError):
+            pass  # Can't validate, continue with drift check
 
     # Run git status --porcelain to detect file changes
     try:

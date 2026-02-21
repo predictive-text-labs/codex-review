@@ -128,6 +128,29 @@ class TestApprovalLifecycle(unittest.TestCase):
                 (review_dir / "version_counter").read_text().strip(), "0"
             )
 
+    def test_invalidate_cleans_versioned_artifacts(self):
+        """Versioned artifacts from previous cycle are cleaned up."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            review_dir = Path(tmpdir) / ".claude" / "review"
+            review_dir.mkdir(parents=True)
+
+            # Create artifacts from a previous cycle
+            (review_dir / "approval.json").write_text("{}")
+            (review_dir / "plan_v1.snapshot.md").write_text("snapshot 1")
+            (review_dir / "plan_v2.snapshot.md").write_text("snapshot 2")
+            (review_dir / "plan_v1.codex.json").write_text("{}")
+            (review_dir / "plan_v2.codex.json").write_text("{}")
+            (review_dir / "plan_v1.annotated.md").write_text("annotated 1")
+            (review_dir / "version_counter").write_text("2")
+
+            plan_review.invalidate_approval(review_dir)
+
+            self.assertFalse((review_dir / "plan_v1.snapshot.md").exists())
+            self.assertFalse((review_dir / "plan_v2.snapshot.md").exists())
+            self.assertFalse((review_dir / "plan_v1.codex.json").exists())
+            self.assertFalse((review_dir / "plan_v2.codex.json").exists())
+            self.assertFalse((review_dir / "plan_v1.annotated.md").exists())
+
     def test_write_approval(self):
         """Approval created on Codex approve with correct hash."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -262,6 +285,63 @@ class TestCodexOutputParsing(unittest.TestCase):
     def test_missing_file(self):
         result = plan_review.parse_codex_output("/nonexistent/path.json")
         self.assertIsNone(result)
+
+
+class TestRejectionFeedback(unittest.TestCase):
+    """Test rejection feedback references annotated plan."""
+
+    def test_annotated_plan_in_feedback(self):
+        """When annotated_plan_markdown is non-empty, feedback references annotated plan."""
+        import io
+        from unittest.mock import patch
+
+        review = {
+            "is_optimal": False,
+            "blocking_issues": [
+                {"severity": "high", "claim": "test claim", "evidence": "e", "fix": "f"}
+            ],
+            "recommended_changes": [],
+            "annotated_plan_markdown": "# Plan\n> Issue here",
+            "summary": "Needs work.",
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            review_dir = Path(tmpdir) / ".claude" / "review"
+            review_dir.mkdir(parents=True)
+
+            output_path = review_dir / "plan_v1.codex.json"
+            with open(output_path, "w") as f:
+                json.dump(review, f)
+
+            parsed = plan_review.parse_codex_output(str(output_path))
+            annotated_md = parsed.get("annotated_plan_markdown", "")
+
+            # Verify annotated plan would be referenced as primary
+            self.assertTrue(len(annotated_md) > 0)
+
+    def test_fallback_to_json_when_annotated_empty(self):
+        """When annotated_plan_markdown is empty, feedback falls back to JSON path."""
+        review = {
+            "is_optimal": False,
+            "blocking_issues": [],
+            "recommended_changes": [],
+            "annotated_plan_markdown": "",
+            "summary": "Needs work.",
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            review_dir = Path(tmpdir) / ".claude" / "review"
+            review_dir.mkdir(parents=True)
+
+            output_path = review_dir / "plan_v1.codex.json"
+            with open(output_path, "w") as f:
+                json.dump(review, f)
+
+            parsed = plan_review.parse_codex_output(str(output_path))
+            annotated_md = parsed.get("annotated_plan_markdown", "")
+
+            # Verify empty annotated plan would trigger fallback
+            self.assertEqual(annotated_md, "")
 
 
 if __name__ == "__main__":

@@ -167,6 +167,44 @@ class TestBashGating(unittest.TestCase):
             result = enforce_approval.check_bash_command(cmd)
             self.assertIsNotNone(result, f"Command should be denied: {cmd}")
 
+    def test_validate_approval_script_allowed(self):
+        """validate_approval.py is allowed even though python3 is blocked."""
+        for cmd in [
+            "python3 /path/to/hooks/validate_approval.py",
+            "python3 validate_approval.py",
+            "python /some/dir/validate_approval.py",
+        ]:
+            result = enforce_approval.check_bash_command(cmd)
+            self.assertIsNone(result, f"Command should be allowed: {cmd}")
+
+    def test_other_python_scripts_still_denied(self):
+        """Other python3 scripts are still blocked."""
+        for cmd in ["python3 script.py", "python3 other.py", "python exploit.py"]:
+            result = enforce_approval.check_bash_command(cmd)
+            self.assertIsNotNone(result, f"Command should be denied: {cmd}")
+
+
+class TestMalformedInput(unittest.TestCase):
+    """Test fail-closed behavior on malformed input."""
+
+    def test_malformed_input_denies(self):
+        """Malformed JSON input results in deny."""
+        import io
+        from unittest.mock import patch
+
+        # Simulate malformed stdin
+        malformed_stdin = io.StringIO("not valid json{{{")
+        stdout_capture = io.StringIO()
+
+        with patch("sys.stdin", malformed_stdin), patch("sys.stdout", stdout_capture):
+            enforce_approval.main()
+
+        output = json.loads(stdout_capture.getvalue())
+        self.assertIn("hookSpecificOutput", output)
+        self.assertEqual(
+            output["hookSpecificOutput"]["permissionDecision"], "deny"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -79,10 +79,14 @@ def get_review_dir(cwd: str) -> Path:
 
 
 def invalidate_approval(review_dir: Path):
-    """Delete approval.json, codex_thread_id, and reset version_counter."""
+    """Delete approval.json, codex_thread_id, old review artifacts, and reset version_counter."""
     for fname in ["approval.json", "codex_thread_id"]:
         f = review_dir / fname
         if f.exists():
+            f.unlink()
+    # Clean up versioned artifacts from previous cycle
+    for pattern in ["plan_v*.snapshot.md", "plan_v*.codex.json", "plan_v*.annotated.md"]:
+        for f in review_dir.glob(pattern):
             f.unlink()
     # Reset version counter
     (review_dir / "version_counter").write_text("0")
@@ -402,16 +406,23 @@ def main():
         else:
             issues_detail = "  (No specific blocking issues listed)"
 
+        annotated_plan_path = review_dir / f"plan_v{version}.annotated.md"
+        if annotated_md:
+            primary_artifact = f"Annotated plan: {annotated_plan_path}"
+            read_instruction = "1. Read the annotated plan at the path above to see Codex's inline feedback."
+        else:
+            primary_artifact = f"Codex review: {output_json_path}"
+            read_instruction = "1. Read the Codex review JSON at the path above."
+
         output_decision(
             "block",
             f"Codex review (v{version}): {issues_summary}",
             f"A co-worker has reviewed your plan and found issues. You must maximally evaluate "
             f"each claim against the code to assess whether it is accurate.\n\n"
             f"Blocking issues:\n{issues_detail}\n\n"
-            f"Full Codex review: {output_json_path}\n"
-            f"Annotated plan: {review_dir / f'plan_v{version}.annotated.md'}\n\n"
+            f"{primary_artifact}\n\n"
             f"Instructions:\n"
-            f"1. Read the full Codex review JSON at the path above.\n"
+            f"{read_instruction}\n"
             f"2. For each blocking issue, evaluate the claim against the actual code.\n"
             f"3. Revise docs/plan.md to address valid issues.\n"
             f"4. Write the revised plan to re-trigger review.\n"
