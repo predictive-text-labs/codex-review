@@ -86,6 +86,8 @@ plugin/
 5. If Codex says "optimal" → hook writes `approval.json` → Claude asks user to confirm
 6. PreToolUse hook prevents any file writes (except `docs/plan.md`) until approval exists
 
+**Note:** Approval is hash-locked — `approval.json` stores a SHA-256 hash of the approved `docs/plan.md`. If the plan is modified after approval, the hash won't match and implementation will be blocked until the plan is re-reviewed.
+
 ## Runtime Artifacts
 
 All review artifacts live in `.claude/review/` (created at runtime):

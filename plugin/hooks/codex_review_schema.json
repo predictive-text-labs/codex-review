@@ -13,7 +13,8 @@
           "evidence": { "type": "string" },
           "fix": { "type": "string" }
         },
-        "required": ["severity", "claim", "evidence", "fix"]
+        "required": ["severity", "claim", "evidence", "fix"],
+        "additionalProperties": false
       }
     },
     "recommended_changes": {

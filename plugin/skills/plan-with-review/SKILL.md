@@ -1,18 +1,18 @@
 ---
-description: Create an implementation plan that will be reviewed by Codex. Guides you through reading strategy, researching the codebase, writing a structured plan to docs/plan.md, and handling the Codex review feedback loop.
+description: Create a Codex-reviewed implementation plan at docs/plan.md with automatic feedback loop.
 ---
 
 # Plan with Codex Review
 
 You are creating an implementation plan that will be automatically reviewed by Codex CLI via a PostToolUse hook. Follow these steps exactly.
 
-## Step 1: Read the Strategy
+## Step 1: Understand the Task
 
-Read the strategy document to understand what needs to be planned.
+Determine what needs to be planned from the argument provided.
 
-- If an argument was provided (e.g., `/plan-with-review docs/my-strategy.md`), read that file.
-- If no argument was provided, read `docs/strategy.md`.
-- If the strategy file doesn't exist, ask the user where the strategy document is.
+- **File path argument** (e.g., `/plan-with-review docs/my-strategy.md`): Read that file as the strategy input.
+- **Free-text argument** (e.g., `/plan-with-review add authentication to the API`): Use the text directly as the task description. No file read needed.
+- **No argument**: Read `docs/strategy.md` as the default strategy input. If it doesn't exist, ask the user what to plan.
 
 ## Step 2: Research the Codebase
 
@@ -28,7 +28,13 @@ Use all available tools: Grep, Glob, Read, and read-only Bash commands (e.g., `g
 
 **Do NOT write the plan until you have a thorough understanding of the relevant code.**
 
-## Step 3: Write the Plan
+## Step 3: Resolve Open Questions
+
+If you have any ambiguities or unresolved questions after researching, present them to the user and wait for answers before writing the plan. Do NOT write a plan with unanswered questions — resolve them now or get the user's explicit decision to defer them.
+
+If you have no open questions, proceed directly to Step 4.
+
+## Step 4: Write the Plan
 
 Write your plan to `docs/plan.md`. The plan MUST contain these sections in this order:
 
@@ -57,7 +63,7 @@ Unresolved questions that need user input.
 
 All six sections are required. The PostToolUse hook will reject the plan if any are missing.
 
-## Step 4: Handle Codex Review Feedback
+## Step 5: Handle Codex Review Feedback
 
 After you write `docs/plan.md`, the PostToolUse hook will automatically:
 1. Snapshot your plan
@@ -65,7 +71,7 @@ After you write `docs/plan.md`, the PostToolUse hook will automatically:
 3. Return the result
 
 **If Codex rejects the plan** (you receive a `decision: "block"` response):
-1. Read the Codex review JSON at the path provided in the feedback.
+1. Read the annotated plan markdown at the path provided in the feedback (stored in `.claude/review/plan_v{N}.annotated.md`). This shows Codex's inline comments on your plan. You can also inspect `.claude/review/plan_v{N}.codex.json` for the full structured review output.
 2. For EACH blocking issue, evaluate the claim against the actual code. Do not blindly accept or dismiss.
 3. Revise `docs/plan.md` to address valid issues.
 4. Write the revised plan (this re-triggers the review automatically).
@@ -76,7 +82,7 @@ After you write `docs/plan.md`, the PostToolUse hook will automatically:
 3. List the remaining unresolved issues from the latest Codex review.
 4. Let the user decide how to proceed.
 
-## Step 5: After Codex Approval
+## Step 6: After Codex Approval
 
 When Codex approves your plan:
 1. Present a summary of the final plan to the user.
