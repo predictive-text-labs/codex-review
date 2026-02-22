@@ -1,88 +1,121 @@
-# Codex Plan Review
+# codex-plan-review (Claude Code plugin)
 
-> A Claude Code plugin that enforces AI-reviewed implementation plans — Claude writes the plan, Codex validates it against the actual codebase, and file writes are physically blocked until the plan is approved.
+A Claude Code plugin that enforces a hard **plan → independent review → approval → implementation** workflow:
 
-## Why Use This?
+- Claude writes the plan (`docs/plan.md`)
+- OpenAI Codex CLI reviews the plan against the real codebase (schema-constrained output)
+- Claude is blocked from editing anything except `docs/plan.md` until the plan is approved
+- Once approved, implementation is unlocked (with hash verification)
 
-LLM-generated implementation plans suffer from three recurring problems:
+This repo is also structured as a **plugin marketplace** containing the `codex-plan-review` plugin at `./plugin`.
 
-1. **Hallucinated APIs** — the plan references functions, modules, or patterns that don't exist in the codebase
-2. **Missed edge cases** — the plan overlooks error handling, concurrency, or integration points that the real code requires
-3. **Suboptimal approaches** — the plan proposes a reasonable solution but ignores a better pattern already established in the codebase
+---
 
-This plugin solves these by adding a second model (Codex CLI) as an automated reviewer that validates every claim against the actual code before implementation begins.
+## Why this exists
 
-**The key innovation is hook-level enforcement.** This isn't a suggestion to "please review your plan" — Claude physically cannot write files other than the plan until Codex approves it. The Write, Edit, and Bash tools are all gated by a PreToolUse hook that checks for a valid, hash-locked approval.
+The biggest risk with autonomous coding agents isn't that they can't write code — it's that **an agent grading its own homework compounds errors instead of catching them.**
 
-## How It Works
+LLM coding agents are fast, but without independent review they frequently:
+
+- **Hallucinate APIs** — reference functions, modules, or integration patterns that don't exist in the codebase
+- **Skip straight to implementation** — start writing code before risks, edge cases, or architectural conflicts are surfaced
+- **Self-confirm** — when the same model that wrote the plan also reviews it, self-review bias means plausible-sounding mistakes survive unchallenged
+
+There is no built-in quality gate between "plan written" and "plan executed." This plugin adds one — and enforces it at the hook level so it can't be bypassed.
+
+### Why two models?
+
+This architecture splits two fundamentally different jobs — **creation** and **verification** — across two independent models, so neither is grading its own work.
 
 ```
-                        ┌─────────────────────────────────┐
-                        │      PLANNING PHASE             │
-                        │   (Write/Edit/Bash restricted)  │
-                        └────────────────┬────────────────┘
-                                         │
-                 User invokes /plan-with-review
-                                         │
-                                         ▼
-                  Claude researches codebase (read-only)
-                  Writes docs/plan.md
-                                         │
-                                         ▼
-              ┌─── PostToolUse hook triggers ◄──────────┐
-              │    Validates plan structure              │
-              │    Snapshots plan (v1, v2, ...)          │
-              │    Sends to Codex CLI for review         │
-              │                                         │
-              ▼                                         │
-         Codex reviews                                  │
-              │                                         │
-         ┌────┴─────┐                                   │
-         ▼          ▼                                   │
-     Approved    Rejected                               │
-         │          │                                   │
-         │          └── Claude reads annotated feedback  │
-         │              Revises docs/plan.md ────────────┘
-         │
-         ▼
-    approval.json written
-    (SHA-256 hash-locked to plan)
-         │
-         ▼
-┌────────────────────────────────────┐
-│      IMPLEMENTATION PHASE          │
-│   (Write/Edit/Bash unrestricted)   │
-└────────────────┬───────────────────┘
-                 │
-    User runs /implement-approved-plan
-                 │
-                 ▼
-    PreToolUse hook validates approval hash
-    Unlocks file writes
-                 │
-                 ▼
-    Claude implements the approved plan
+┌─────────────────────────────┐               ┌─────────────────────────────┐
+│     CLAUDE (Planner)        │   docs/       │     CODEX (Verifier)        │
+│                             │   plan.md     │                             │
+│  • Researches the codebase  │ ────────────▶ │  • Evaluates every claim    │
+│  • Writes structured plan   │               │    against actual code      │
+│  • Revises based on         │ ◀──────────── │  • Returns structured JSON  │
+│    annotated feedback       │   Annotated   │    with blocking issues     │
+│                             │   feedback    │  • Uses MCP for deep        │
+│                             │               │    codebase introspection   │
+└─────────────────────────────┘               └─────────────────────────────┘
 ```
 
-**The review loop in detail:**
+**Claude produces the plan.** It excels at synthesizing requirements into structured, human-readable implementation plans — researching the codebase with read-only tools and organizing findings into a 6-section format (Goal, Context, Approach, Changes, Risks, Open Questions).
 
-1. Claude writes `docs/plan.md` with all 6 required sections
-2. The PostToolUse hook validates plan structure, snapshots the plan, and sends it to Codex CLI
-3. Codex evaluates every claim against the actual code via its MCP servers
-4. If rejected — the hook blocks with feedback; Claude reads the annotated review, evaluates each issue against the code, and revises the plan (re-triggering review automatically)
-5. If approved — the hook writes `approval.json` with the plan's SHA-256 hash; Claude presents the plan and asks the user to confirm
-6. The user runs `/implement-approved-plan` (optionally after `/clear` to free context) and the PreToolUse hook now allows file writes
+**Codex verifies the plan.** Running headless via `codex exec`, Codex acts as a strict auditor confined to a JSON output schema. It can't "go off script" — it must return structured `blocking_issues` with evidence and fixes, or approve the plan as optimal. It uses available MCP servers for deep codebase access.
+
+**The handoff is artifact-based, not conversational.** The plan file, approval record, and review artifacts are deterministic files on disk. Claude and Codex never share a conversation — they share a filesystem. This makes the workflow reproducible, auditable, and impossible to subvert through prompt manipulation.
+
+---
+
+## Key features
+
+- **Automatic plan review** every time `docs/plan.md` is written or edited
+- **Structured review output** (JSON Schema) so approval is machine-checkable, not just prose
+- **Hash-locked approval** — SHA-256 of the exact plan content; any change invalidates it
+- **Planning-stage lockdown**
+  - Only `docs/plan.md` can be edited
+  - Bash restricted to a read-only allowlist (`ls`, `rg`, `git diff`, `cat`, etc.)
+  - Drift check blocks unexpected file modifications after Bash commands
+- **Persistent Codex sessions** — thread ID stored for resume across revision rounds
+- **Full audit trail** in `.claude/review/` — per-revision snapshots, Codex JSON outputs, annotated plans with inline feedback
+- **Worktree bootstrap** script to isolate the workflow from your main working tree
+
+---
+
+## How it works
+
+```mermaid
+flowchart TD
+    A["/plan-with-review"] --> B["Claude researches codebase<br/>(read-only tools only)"]
+    B --> C["Write docs/plan.md"]
+    C --> D["PostToolUse hook: plan_review.py"]
+    D --> E{"Plan has all 6<br/>required sections?"}
+    E -- no --> F["BLOCK: list missing sections"]
+    F --> C
+    E -- yes --> G["Snapshot plan v N<br/>Send to Codex CLI"]
+    G --> H{"Codex: is_optimal?"}
+    H -- no --> I["BLOCK: return annotated<br/>feedback + blocking issues"]
+    I --> J["Claude evaluates feedback<br/>against actual code"]
+    J --> C
+    H -- yes --> K["Write approval.json<br/>(SHA-256 hash-locked)"]
+    K --> L["Claude presents plan<br/>asks user to confirm"]
+    L --> M["/implement-approved-plan"]
+    M --> N["validate_approval.py<br/>(hash check)"]
+    N --> O["PreToolUse unlocks<br/>Write / Edit / Bash"]
+    O --> P["Claude implements<br/>the approved plan"]
+```
+
+**Step by step:**
+
+1. **Planning** — You run `/plan-with-review`. Claude researches the codebase using read-only tools and writes a 6-section plan to `docs/plan.md`.
+2. **Interception** — A `PostToolUse` hook detects the write to `docs/plan.md`, validates plan structure, and snapshots the plan.
+3. **Review** — The hook sends the plan to Codex CLI. Codex evaluates every claim against the actual code and returns structured JSON feedback.
+4. **Rejection loop** — If Codex finds issues, the hook blocks Claude with annotated feedback. Claude reads the feedback, evaluates each issue against the code, revises the plan, and re-triggers review. This repeats up to 5 times.
+5. **Approval** — When Codex approves, the hook writes `approval.json` containing the plan's SHA-256 hash. Claude presents the final plan and asks you to confirm.
+6. **Implementation** — You run `/implement-approved-plan`. The `PreToolUse` hook verifies the hash and unlocks Write, Edit, and Bash. Claude implements the plan.
+
+**The two phases:**
+
+| | Planning Phase | Implementation Phase |
+|---|---|---|
+| **Write/Edit** | Only `docs/plan.md` | Unrestricted |
+| **Bash** | Read-only allowlist only | Unrestricted |
+| **Triggered by** | `/plan-with-review` | `/implement-approved-plan` |
+| **Gated by** | Plan structure validation + Codex review | `approval.json` hash match |
+
+---
 
 ## Prerequisites
 
 | Tool | Purpose | Install |
 |------|---------|---------|
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | AI coding agent (host for the plugin) | `npm install -g @anthropic-ai/claude-code` |
-| [Codex CLI](https://github.com/openai/codex) | Second model for plan review | `npm install -g @openai/codex` |
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | AI coding agent (plugin host) | `npm install -g @anthropic-ai/claude-code` |
+| [Codex CLI](https://github.com/openai/codex) | Independent plan reviewer | `npm install -g @openai/codex` |
 | Python 3 | Hook scripts runtime | Pre-installed on macOS/Linux |
 | Git | Version control, drift detection | Pre-installed on macOS/Linux |
 
-**Verify your setup:**
+Verify your setup:
 
 ```bash
 claude --version    # Claude Code CLI
@@ -91,7 +124,7 @@ python3 --version   # Python 3
 git --version       # Git
 ```
 
-**Note:** Codex MCP configuration (`.codex/config.toml`) is user-managed. The plugin does not configure Codex's MCP servers — you must ensure Codex has the MCP access it needs to review your codebase effectively.
+**Note:** Codex MCP configuration (`.codex/config.toml`) is user-managed. The plugin does not configure Codex's MCP servers — you must ensure Codex has the access it needs to review your codebase effectively.
 
 ## Installation
 
@@ -150,14 +183,15 @@ Three ways to invoke:
 /codex-plan-review:plan-with-review add authentication to the API
 ```
 
-**What happens:**
+What happens:
 
 1. Claude reads the input (file or text) and researches the codebase using read-only tools
-2. Claude writes `docs/plan.md` with all required sections
-3. The PostToolUse hook automatically sends the plan to Codex for review
-4. If rejected, Claude reads Codex's annotated feedback, evaluates it against the code, and revises
-5. The loop repeats (up to 5 revisions) until Codex approves
-6. On approval, Claude presents the plan and asks: *"Ready to execute?"*
+2. If there are open questions, Claude asks you before writing the plan
+3. Claude writes `docs/plan.md` with all 6 required sections
+4. The PostToolUse hook automatically snapshots the plan and sends it to Codex
+5. If rejected — Claude reads Codex's annotated feedback, evaluates each issue against the code, and revises (re-triggering review automatically)
+6. The loop repeats (up to 5 revisions) until Codex approves
+7. On approval — Claude presents the plan and asks: *"Ready to execute?"*
 
 ### Implement Approved Plan
 
@@ -165,7 +199,7 @@ Three ways to invoke:
 /codex-plan-review:implement-approved-plan
 ```
 
-**What happens:**
+What happens:
 
 1. Runs `validate_approval.py` to confirm `approval.json` is valid and hash matches
 2. Reads `docs/plan.md` for the approved approach and file-level changes
@@ -173,9 +207,11 @@ Three ways to invoke:
 
 **Tip:** Use `/clear` between planning and implementation to free up context window. The implementation skill works entirely from artifacts (`docs/plan.md` and `approval.json`) — it does not depend on the planning session.
 
+---
+
 ## Plan Structure
 
-The plan at `docs/plan.md` must contain these 6 sections. The PostToolUse hook rejects the plan if any are missing.
+`docs/plan.md` must contain these 6 sections. The PostToolUse hook rejects the plan if any are missing.
 
 | Section | Purpose |
 |---------|---------|
@@ -185,6 +221,8 @@ The plan at `docs/plan.md` must contain these 6 sections. The PostToolUse hook r
 | `## Changes` | File-level detail: what changes, new files, affected dependencies. |
 | `## Risks` | What could go wrong. Mitigation strategies. |
 | `## Open Questions` | Unresolved questions needing user input. |
+
+---
 
 ## Architecture
 
@@ -232,10 +270,10 @@ The enforcement gate. Runs before every Write, Edit, and Bash tool use.
 - **Write/Edit to `.claude/review/`**: Always denied (hook-managed directory)
 - **Write/Edit to any other file**: Denied unless `approval.json` exists with valid hash
 - **Bash commands before approval**: Only read-only commands allowed. The hook maintains:
-  - An allowlist of safe commands (`rg`, `grep`, `ls`, `cat`, `head`, `tail`, `wc`, `tree`, `echo`, `pwd`, etc.)
-  - Read-only git subcommands (`status`, `diff`, `show`, `log`, `branch`, etc.)
-  - A blocklist of dangerous commands (`python3`, `node`, `npm`, `sed`, `rm`, `mv`, `curl`, etc.)
-  - Shell operator detection (`|`, `;`, `&&`, `>`, `>>`, `` ` ``, `$(`, etc.)
+  - An allowlist of safe commands (`rg`, `grep`, `ls`, `cat`, `head`, `tail`, `wc`, `file`, `fd`, `tree`, `which`, `echo`, `pwd`, `date`, `env`, `printenv`)
+  - Read-only git subcommands (`status`, `diff`, `show`, `log`, `rev-parse`, `grep`, `branch`, `remote`, `tag`, `describe`, `shortlog`, `stash`, `ls-files`, `ls-tree`, `cat-file`)
+  - A blocklist of dangerous commands (`python`, `python3`, `node`, `bash`, `sh`, `sed`, `awk`, `npm`, `npx`, `yarn`, `rm`, `mv`, `cp`, `mkdir`, `curl`, `wget`, `docker`, `make`, and others)
+  - Shell operator detection (`|`, `;`, `&&`, `||`, `>`, `>>`, `<`, `$(`, `` ` ``)
   - Special exception: `python3 validate_approval.py` is allowed (needed by the implementation skill)
 - **After approval**: Everything is allowed
 
@@ -254,7 +292,9 @@ The review engine. Triggers after any Write/Edit to `docs/plan.md`.
 
 **`bash_drift_check.py` (PostToolUse)**
 
-Runs after every Bash command during the planning phase. Checks `git status --porcelain` for file changes outside `docs/plan.md` and `.claude/review/`. If unexpected changes are detected, it blocks with a list of affected files. Skips entirely if a valid approval exists (implementation phase).
+Runs after every Bash command during the planning phase. Checks `git status --porcelain` for file changes outside `docs/plan.md` and `.claude/review/`. If unexpected changes are detected, blocks with a list of affected files. Skips entirely if a valid approval exists (implementation phase).
+
+---
 
 ## Runtime Artifacts
 
@@ -281,7 +321,9 @@ All review artifacts are stored in `.claude/review/` (created at runtime, gitign
 }
 ```
 
-**Hash sensitivity:** The `plan_hash` is a SHA-256 of the raw bytes of `docs/plan.md`. Any modification to the plan after approval — even whitespace changes — will invalidate the hash and block implementation until the plan is re-reviewed.
+**Hash sensitivity:** The `plan_hash` is a SHA-256 of the raw bytes of `docs/plan.md`. Any modification after approval — even whitespace changes — invalidates the hash and blocks implementation until the plan is re-reviewed.
+
+---
 
 ## Codex Review Schema
 
@@ -310,9 +352,11 @@ Codex returns structured JSON conforming to `codex_review_schema.json`:
 |-------|------|-------------|
 | `is_optimal` | `boolean` | `true` only if the plan is solid, accurate, and optimal |
 | `blocking_issues` | `array` | Issues that must be fixed. Each has `severity` (high/medium/low), `claim`, `evidence`, and `fix` |
-| `recommended_changes` | `array` of `string` | Non-blocking suggestions for improvement |
+| `recommended_changes` | `array of string` | Non-blocking suggestions for improvement |
 | `annotated_plan_markdown` | `string` | The full plan with Codex's inline comments as blockquotes |
 | `summary` | `string` | One-line summary of the review result |
+
+---
 
 ## Troubleshooting
 
@@ -327,7 +371,7 @@ codex --version  # Verify installation
 
 ### "Missing required sections"
 
-Your `docs/plan.md` is missing one or more of the 6 required section headings. The error message lists which ones. Ensure your plan contains exactly these headings:
+Your `docs/plan.md` is missing one or more of the 6 required headings. The error message lists which ones. Ensure your plan contains exactly:
 
 ```markdown
 ## Goal
@@ -340,13 +384,12 @@ Your `docs/plan.md` is missing one or more of the 6 required section headings. T
 
 ### "Maximum revision threshold reached"
 
-The plan has been revised 5 times without reaching Codex approval. The hook will not allow further revisions. You have two options:
+The plan has been revised 5 times without Codex approval. The hook will not allow further revisions. You have two options:
 
 1. **Review the impasse** — read the latest annotated feedback in `.claude/review/` and decide if the remaining issues matter
 2. **Force-approve manually** — create `approval.json` with the correct hash:
 
 ```bash
-# Generate the plan hash
 python3 -c "
 import hashlib, json
 with open('docs/plan.md', 'rb') as f:
@@ -365,7 +408,7 @@ The enforcement hook is blocking writes because no valid approval exists. Either
 
 ### "Plan modified since approval"
 
-`docs/plan.md` has been changed after Codex approved it (the SHA-256 hash no longer matches). You need to re-run the review:
+`docs/plan.md` changed after Codex approved it (SHA-256 hash no longer matches). Re-run the review:
 
 ```bash
 /codex-plan-review:plan-with-review
@@ -381,13 +424,15 @@ The Codex review exceeded the 540-second subprocess timeout. This can happen wit
 
 ### "Unexpected file changes detected"
 
-The bash drift check found files modified outside of `docs/plan.md` and `.claude/review/` during the planning phase. This usually means a Bash command had unintended side effects. Revert the unexpected changes or investigate what caused them.
+The bash drift check found files modified outside `docs/plan.md` and `.claude/review/` during the planning phase. This usually means a Bash command had unintended side effects. Revert the unexpected changes or investigate what caused them.
+
+---
 
 ## OpenSpec Integration
 
 This project uses [OpenSpec](https://github.com/openspec) for specification management. The `openspec/` directory contains WHEN/THEN specifications that formally describe the plugin's behavior.
 
-### Directory Structure
+### Spec Directory
 
 ```
 openspec/
@@ -406,7 +451,7 @@ openspec/
     └── worktree-bootstrap/       # Worktree creation
 ```
 
-### Sample Spec (WHEN/THEN format)
+### Sample Spec
 
 From `plan-review-hook/spec.md`:
 
@@ -424,8 +469,6 @@ From `plan-review-hook/spec.md`:
 
 ### OpenSpec Commands
 
-The project includes OpenSpec slash commands for managing specifications and changes:
-
 | Command | Description |
 |---------|-------------|
 | `/opsx:explore` | Enter explore mode — think through ideas, investigate problems, clarify requirements |
@@ -439,6 +482,8 @@ The project includes OpenSpec slash commands for managing specifications and cha
 | `/opsx:bulk-archive` | Archive multiple completed changes at once |
 | `/opsx:onboard` | Guided onboarding — walk through a complete OpenSpec workflow cycle |
 
+---
+
 ## Contributing
 
 ### Dev Setup
@@ -451,7 +496,7 @@ claude --plugin-dir ./plugin    # Load the plugin for development
 
 ### Making Changes
 
-This project uses its own review workflow. To make changes:
+This project uses its own review workflow:
 
 1. Run `/codex-plan-review:plan-with-review` with your proposed change
 2. Iterate through the review loop until Codex approves
@@ -494,6 +539,8 @@ python3 -m pytest plugin/tests/ -v
 - Hook scripts are standalone Python 3 with no external dependencies
 - All hooks communicate via JSON on stdin/stdout
 - Hooks exit 0 in all cases (errors are communicated via JSON output, not exit codes)
+
+---
 
 ## Project Structure
 
